@@ -1,0 +1,283 @@
+#include <bits/stdc++.h>
+#include <memory>
+#include <random>
+
+// ---------------------------------------------------------------------------
+// Interfaces for abstraction (OOP and SOLID)
+// ---------------------------------------------------------------------------
+
+// Password Hasher Interface
+class IPasswordHasher {
+public:
+    virtual ~IPasswordHasher() = default;
+    virtual std::string hash(const std::string &input) const = 0;
+};
+
+// Salt Generator Interface
+class ISaltGenerator {
+public:
+    virtual ~ISaltGenerator() = default;
+    virtual std::string generateSalt(std::size_t length = 16) const = 0;
+};
+
+// Encryptor Interface
+class IEncryptor {
+public:
+    virtual ~IEncryptor() = default;
+    virtual std::string encrypt(const std::string &data) const = 0;
+    virtual std::string decrypt(const std::string &data) const = 0;
+};
+
+// ---------------------------------------------------------------------------
+// Mock Implementations of Various Hashers (Argon2, Bcrypt, SHA-256, Polynomial, Crypto)
+// In real code, Argon2 and Bcrypt would use their actual library calls,
+// and SHA-256 would use a proper cryptographic hash function.
+// ---------------------------------------------------------------------------
+
+// Mock Argon2 Hasher implementing IPasswordHasher
+class Argon2Hasher : public IPasswordHasher {
+public:
+    std::string hash(const std::string &input) const override {
+        return "argon2$" + std::to_string(std::hash<std::string>()(input));
+    }
+};
+
+// Mock Bcrypt Hasher implementing IPasswordHasher
+class BcryptHasher : public IPasswordHasher {
+public:
+    std::string hash(const std::string &input) const override {
+        return "bcrypt$" + std::to_string(std::hash<std::string>()(input));
+    }
+};
+
+// Mock SHA-256 Hasher implementing IPasswordHasher
+class SHA256Hasher : public IPasswordHasher {
+private:
+    std::string pseudoSHA256(const std::string &input) const {
+        auto val = std::hash<std::string>()(input);
+        std::ostringstream oss;
+        oss << std::hex << val;
+        return oss.str();
+    }
+
+public:
+    std::string hash(const std::string &input) const override {
+        return "sha256$" + pseudoSHA256(input);
+    }
+};
+
+// Polynomial Hasher (Non-cryptographic, demonstration only)
+class PolynomialHasher : public IPasswordHasher {
+private:
+    long long p, mod;
+    long long polynomialHash(const std::string &s) const {
+        long long hashValue = 0;
+        long long power = 1;
+        for (unsigned char c : s) {
+            hashValue = (hashValue + c * power) % mod;
+            power = (power * p) % mod;
+        }
+        return hashValue;
+    }
+public:
+    PolynomialHasher(long long p = 131, long long mod = 1000000007LL) 
+        : p(p), mod(mod) {}
+
+    std::string hash(const std::string &input) const override {
+        return std::to_string(polynomialHash(input));
+    }
+};
+
+// Mock Crypto Hasher (Placeholder for something like a secure final hash)
+class CryptoHasher : public IPasswordHasher {
+public:
+    std::string hash(const std::string &input) const override {
+        std::hash<std::string> h;
+        auto val = h(input);
+        std::ostringstream oss;
+        oss << std::hex << val;
+        return oss.str();
+    }
+};
+
+// ---------------------------------------------------------------------------
+// MultiHasher
+// Combines multiple hashing algorithms into a single final hash
+// ---------------------------------------------------------------------------
+class MultiHasher : public IPasswordHasher {
+private:
+    std::vector<std::unique_ptr<IPasswordHasher>> hashers;
+    std::unique_ptr<IPasswordHasher> finalSecureHasher;
+
+public:
+    MultiHasher(std::vector<std::unique_ptr<IPasswordHasher>> hashers,
+                std::unique_ptr<IPasswordHasher> finalSecureHasher)
+        : finalSecureHasher(std::move(finalSecureHasher))
+    {
+        for (auto &h : hashers) {
+            this->hashers.push_back(std::move(h));
+        }
+    }
+
+    std::string hash(const std::string &input) const override {
+        std::ostringstream combined;
+        for (auto &h : hashers) {
+            combined << h->hash(input) << "|";
+        }
+        // Run the combined string through the final secure hasher
+        return finalSecureHasher->hash(combined.str());
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Salt Generator Implementation
+// ---------------------------------------------------------------------------
+class SecureSaltGenerator : public ISaltGenerator {
+public:
+    std::string generateSalt(std::size_t length = 16) const override {
+        static const char charset[] =
+            "abcdefghijklmnopqrstuvwxyz"
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ"
+            "0123456789!@#$%^&*()-_=+";
+
+        std::random_device rd;
+        std::mt19937_64 gen(rd());
+        std::uniform_int_distribution<size_t> dist(0, sizeof(charset) - 2);
+
+        std::string salt;
+        salt.reserve(length);
+        for (size_t i = 0; i < length; i++) {
+            salt.push_back(charset[dist(gen)]);
+        }
+        return salt;
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Mock AES and RSA Encryption (Implementing IEncryptor)
+// ---------------------------------------------------------------------------
+class AESEncryptor : public IEncryptor {
+public:
+    std::string encrypt(const std::string &data) const override {
+        std::string rev = data;
+        std::reverse(rev.begin(), rev.end());
+        return "aes:" + rev;
+    }
+
+    std::string decrypt(const std::string &data) const override {
+        if (data.find("aes:") == 0) {
+            std::string part = data.substr(4);
+            std::reverse(part.begin(), part.end());
+            return part;
+        }
+        return "";
+    }
+};
+
+class RSAEncryptor : public IEncryptor {
+public:
+    std::string encrypt(const std::string &data) const override {
+        return "rsa:" + data;
+    }
+
+    std::string decrypt(const std::string &data) const override {
+        if (data.find("rsa:") == 0) {
+            return data.substr(4);
+        }
+        return "";
+    }
+};
+
+// ---------------------------------------------------------------------------
+// PasswordService
+// Uses multi-hashing and optionally encrypts the final hash for demonstration.
+// ---------------------------------------------------------------------------
+class PasswordService {
+private:
+    std::unique_ptr<IPasswordHasher> hasher;
+    std::unique_ptr<ISaltGenerator> saltGenerator;
+    std::unique_ptr<IEncryptor> encryptor; // Optional layer
+
+public:
+    PasswordService(std::unique_ptr<IPasswordHasher> hasher,
+                    std::unique_ptr<ISaltGenerator> saltGenerator,
+                    std::unique_ptr<IEncryptor> encryptor = nullptr)
+        : hasher(std::move(hasher)), saltGenerator(std::move(saltGenerator)), encryptor(std::move(encryptor)) {}
+
+    // Hash the password with a newly generated salt
+    std::string hashPasswordWithSalt(const std::string &password, std::string &outSalt) const {
+        outSalt = saltGenerator->generateSalt(32); 
+        std::string salted = password + outSalt;
+        std::string finalHash = hasher->hash(salted);
+        // Optionally encrypt the final hash
+        if (encryptor) {
+            finalHash = encryptor->encrypt(finalHash);
+        }
+        return finalHash;
+    }
+
+    // Verify the password by re-hashing and comparing
+    bool verifyPassword(const std::string &password, const std::string &salt, const std::string &stored) const {
+        std::string storedHash = stored;
+        if (encryptor) {
+            // Decrypt stored hash first if encrypted
+            storedHash = encryptor->decrypt(storedHash);
+        }
+
+        std::string attempt = hasher->hash(password + salt);
+        return (attempt == storedHash);
+    }
+};
+
+// ---------------------------------------------------------------------------
+// Example usage combining everything
+// ---------------------------------------------------------------------------
+int main() {
+    // Build a vector of multiple hashers:
+    // Include Argon2, Bcrypt, SHA-256, Polynomial, etc.
+    std::vector<std::unique_ptr<IPasswordHasher>> hashers;
+    hashers.push_back(std::make_unique<Argon2Hasher>());
+    hashers.push_back(std::make_unique<BcryptHasher>());
+    hashers.push_back(std::make_unique<SHA256Hasher>());
+    hashers.push_back(std::make_unique<PolynomialHasher>());
+    hashers.push_back(std::make_unique<PolynomialHasher>(137, 1000003)); // Different params
+
+    // Create a final secure hasher (CryptoHasher) for the combination
+    auto finalHasher = std::make_unique<CryptoHasher>();
+
+    // Create the MultiHasher
+    std::unique_ptr<IPasswordHasher> multiHasher = std::make_unique<MultiHasher>(std::move(hashers), std::move(finalHasher));
+
+    // Create the salt generator
+    std::unique_ptr<ISaltGenerator> saltGen = std::make_unique<SecureSaltGenerator>();
+
+    // Optional: Add encryption (AES or RSA). Let's use AES for demonstration.
+    std::unique_ptr<IEncryptor> aesEnc = std::make_unique<AESEncryptor>();
+
+    // Create the PasswordService with MultiHasher, SaltGenerator, and AES encryption
+    PasswordService service(std::move(multiHasher), std::move(saltGen), std::move(aesEnc));
+
+    // Prompt user for a new password
+    std::cout << "Enter a new password: ";
+    std::string password;
+    std::cin >> password;
+
+    std::string salt;
+    std::string storedHash = service.hashPasswordWithSalt(password, salt);
+
+    std::cout << "Stored Hash (possibly encrypted): " << storedHash << "\n";
+    std::cout << "Stored Salt: " << salt << "\n";
+
+    // Now verify
+    std::cout << "Enter password to verify: ";
+    std::string attempt;
+    std::cin >> attempt;
+
+    if (service.verifyPassword(attempt, salt, storedHash)) {
+        std::cout << "Password verification successful!\n";
+    } else {
+        std::cout << "Password verification failed.\n";
+    }
+
+    return 0;
+}
